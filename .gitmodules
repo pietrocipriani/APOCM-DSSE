@@ -1,0 +1,3 @@
+[submodule "monocypher-cpp"]
+	path = monocypher-cpp
+	url = git@github.com:snej/monocypher-cpp.git

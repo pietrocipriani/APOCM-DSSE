@@ -4,7 +4,9 @@
 #include <cstdlib>
 #include <utility>
 #include <functional>
-#include <sockpp/unix_dgram_socket.h>
+#include <sockpp/unix_stream_socket.h>
+
+#define SOCK_ADDR "\0dsse_apocm"
 
 int main(int argc, const char **argv) {
     sockpp::initialize();
@@ -19,13 +21,20 @@ int main(int argc, const char **argv) {
     }
 
 
-    Protocol<32> dsse;
+    try {
 
-    std::visit(overload{
-        [&](const ArgsAdd& args) { dsse.add(args); },
-        [&](const ArgsRemove& args) { dsse.remove(args); },
-        [&](const ArgsSearch& args) { dsse.search(args); },
-    }, args);
+        Protocol<32> dsse(SOCK_ADDR);
+
+        std::visit(overload{
+            [&](const ArgsAdd& args) { dsse.add(args); },
+            [&](const ArgsRemove& args) { dsse.remove(args); },
+            [&](const ArgsSearch& args) { dsse.search(args); },
+        }, args);
+
+    } catch (const std::runtime_error& e) {
+        std::cerr << e.what() << std::endl;
+        return EXIT_FAILURE;
+    }
 
     return EXIT_SUCCESS;
 }

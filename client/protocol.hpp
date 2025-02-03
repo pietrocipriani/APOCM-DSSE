@@ -4,6 +4,7 @@
 #include "utils.hpp"
 #include <iostream>
 #include <cstdint>
+#include <sockpp/unix_connector.h>
 
 
 template<size_t lambda>
@@ -16,8 +17,13 @@ private:
     
     std::array<uint8_t, lambda> key_g, key_f, key_t;
 
+    sockpp::unix_connector sock;
+
 
 public:
+    
+    Protocol(const sockpp::unix_address& server_addr);
+    Protocol(std::string&& server_addr) : Protocol(sockpp::unix_address{server_addr}) {}
 
     void add(const ArgsAdd& args);
 

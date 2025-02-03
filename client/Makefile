@@ -1,5 +1,5 @@
 
-GPPPARAMS := -std=c++23 -Wall -Wextra -Wpedantic
+GPPPARAMS := -std=c++23 -Wall -Wextra -Wpedantic -lsockpp
 
 
 client: main.cpp argparse.o protocol.o

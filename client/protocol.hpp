@@ -3,7 +3,7 @@
 #include "argparse.hpp"
 #include "utils.hpp"
 #include <iostream>
-#include <stdint>
+#include <cstdint>
 
 
 template<size_t lambda>
@@ -26,3 +26,7 @@ public:
     void search(const ArgsSearch& args);
 
 };
+
+
+template class Protocol<32>;
+template class Protocol<64>;

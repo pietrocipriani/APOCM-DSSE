@@ -4,8 +4,10 @@
 #include <cstdlib>
 #include <utility>
 #include <functional>
+#include <sockpp/unix_dgram_socket.h>
 
 int main(int argc, const char **argv) {
+    sockpp::initialize();
     
     Args args;
 
@@ -17,7 +19,7 @@ int main(int argc, const char **argv) {
     }
 
 
-    Protocol dsse;
+    Protocol<32> dsse;
 
     std::visit(overload{
         [&](const ArgsAdd& args) { dsse.add(args); },

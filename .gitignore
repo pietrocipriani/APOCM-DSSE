@@ -1,5 +1,5 @@
 # cpp gitignore
 *.o
-./server/server
-./client/client
-./server/storage/
+server/server
+client/client
+server/storage

@@ -5,20 +5,24 @@
 #include <iostream>
 #include <cstdint>
 #include <sockpp/unix_connector.h>
+#include <Monocypher.hh>
 
 
-template<size_t lambda>
+template<size_t lambda = 32>
 class Protocol {
 private:
     // NOTE: encrypted keys
 
     // Documents encryption key
-    std::array<uint8_t, lambda> key_d;
+    monocypher::byte_array<lambda> key_d;
     
-    std::array<uint8_t, lambda> key_g, key_f, key_t;
+    monocypher::byte_array<lambda> key_g, key_f, key_t;
 
     sockpp::unix_connector sock;
 
+    bool load_keys();
+    void load_or_setup_keys();
+    void setup();
 
 public:
     

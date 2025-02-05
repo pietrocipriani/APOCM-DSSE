@@ -18,7 +18,7 @@ template<size_t lambda = 32>
 class Protocol {
 private:
     enum class Operation { add, remove };
-    using KTMap = std::unordered_multimap<std::string, uuid_t>;
+    using KTMap = std::unordered_map<std::string, unordered_set<uuid_t>>;
     using Data = std::vector<uint8_t>;
 
     Keystore<lambda> keystore;

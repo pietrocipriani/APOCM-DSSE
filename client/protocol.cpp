@@ -31,18 +31,23 @@ void Protocol<lambda>::setup() {
 
 template<size_t lambda>
 void Protocol<lambda>::add([[maybe_unused]] const ArgsAdd& args) {
-    load_or_setup_keys();
 
     // NOTE: memory issues can arise.
     KTMap index;
     // TODO: fill map.
     
-    // TODO: this can lead to memory issues, however sending while encrypting increases the key exposure.
+    
+    load_or_setup_keys();
+
+    // NOTE: this can lead to memory issues, however sending while encrypting increases the key exposure in memory.
     auto encrypted_index = process(Operation::add, index);
     auto docs = encrypt_documents(args);
 
+    keystore.wipe();
+
     send(encrypted_index);
     send(docs);
+
     print_response();
 }
 
@@ -70,28 +75,32 @@ Protocol<lambda>::Protocol(const sockpp::unix_address& server_addr) {
 
 template<size_t lambda>
 Data Protocol<lambda>::process(Operation op, const KTMap& index) const {
+    // Blake2b as prf and hash function.
+    using prf = monocypher::hash<monocypher::Blake2b<32>>;
     using hash = monocypher::hash<monocypher::Blake2b<32>>;
+    using prp = monocypher::symmetric_key;
     using value = byte_array<hash::Size + sizeof(uint64_t) + hash::Size>;
 
     unordered_map<hash, value> encrypted_index;
 
-    for (auto& keyword : index) { // TODO: find how to do this.
+    for (auto& [keyword, docs] : index) { // TODO: find how to do this.
         auto [start, end] = index.equal_range(keyword);
 
-        // TODO: keys should be erased to avoid to correlate keys with hashes.
-        auto kt = hash::createMAC(keyword, keystore.key_f);
+        // TODO: keywords should be erased to avoid to correlate keys with hashes.
+        auto kt = prf::createMAC(keyword, keystore.key_f);
         auto key = hash::create(kt | keystore.con);
         auto addr = hash::create(key | 1);
 
-        for (; start != end; ++start) {
-            byte_array<hash::Size> rn;
-            // TODO: check that otherwise rn is filled with zeros.
-            if (std::next(start) != end) {
-                // TODO: check that rn is not zero.
+        for (auto& uuid : docs) {
+            byte_array<hash::Size> rn(0);
+
+            // If this is not the last document, then rn must be a non-zero random sequence.
+            while (std::next(start) != end && rn == byte_array(0)) {
                 rn.random();
             }
-            auto sk = hash::createMAC(keyword | keystore.con);
-            auto eid = prp(uuid | op, keystore.key_g);
+
+            auto sk = prf::createMAC(keyword | keystore.con, keystore.key_g);
+            auto eid = prp::lock(uuid | op, sk);
             static_assert(dectype(eid)::Size == hash::Size);
 
             auto val = (hash::create(key | 0) ^ eid) | con | rn;
@@ -99,8 +108,6 @@ Data Protocol<lambda>::process(Operation op, const KTMap& index) const {
             encrypted_index[addr] = val;
 
             addr ^= rn;
-
-            // TODO: manage the last.
         }
     }
 

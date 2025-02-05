@@ -35,8 +35,8 @@ int main() {
     std::string user_id = "test_user";
 
     // Simulated Se and Sr (encrypted indexes received from the client)
-    std::vector<uint8_t> Se_data = generate_random_data(256);  // 256-byte encrypted Se
-    std::vector<uint8_t> Sr_data = generate_random_data(128);  // 128-byte encrypted Sr
+    std::vector<uint8_t> Se_data = generate_random_data(256+64+256);
+    std::vector<uint8_t> Sr_data = generate_random_data(256);
 
     std::cout << "\nInitializing Encrypted Index for User: " << user_id << "\n";
     if (!server.init_encrypted_index(user_id, Se_data, Sr_data)) {
@@ -45,7 +45,7 @@ int main() {
     }
 
     // Simulated Se' update
-    std::vector<uint8_t> Se_update = generate_random_data(256);  // 256-byte update
+    std::vector<uint8_t> Se_update = generate_random_data(256+64+256);
 
     std::cout << "\nUpdating Encrypted Index for User: " << user_id << "\n";
     if (!server.update_encrypted_index(user_id, Se_update)) {

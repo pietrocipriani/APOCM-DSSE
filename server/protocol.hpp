@@ -5,16 +5,12 @@
 #include <unordered_map>
 #include <filesystem>
 
-// Encrypted index entry structure (each keyword maps to encrypted metadata)
-struct EncryptedIndexEntry {
-    std::vector<uint8_t> eid;  // Encrypted document ID (256 bits)
-    uint64_t con;              // Counter (64 bits)
-};
+namespace fs = std::filesystem;
 
 // DSSE Protocol - Handles server-side storage and updates
 class DSSEProtocol {
 public:
-    explicit DSSEProtocol(const std::string& base_storage_path);
+    explicit DSSEProtocol(const fs::path& base_storage_path);
 
     // Process Se and Sr received from the client
     bool init_encrypted_index(const std::string& user_id, 
@@ -30,9 +26,10 @@ public:
                                   const std::vector<uint8_t>& document_data);
 
 private:
-    std::string storage_path;
+    fs::path storage_path;
 
     // Helpers
     bool is_valid_filename(const std::string& name);
     bool create_user_directory(const std::string& user_id);
+    std::string uuid_to_hex(const std::vector<uint8_t>& uuid);
 };

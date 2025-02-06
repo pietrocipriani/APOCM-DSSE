@@ -3,8 +3,10 @@
 #include <iostream>
 #include <sstream>
 #include <iomanip>
+#include <unordered_map>
 #include <cstring>
 #include <sys/stat.h>
+#include <Monocypher.hh>
 
 namespace fs = std::filesystem;
 
@@ -212,3 +214,196 @@ bool DSSEProtocol::store_encrypted_document(const std::string& user_id,
     return true;
 }
 
+// NOTE: Refer to the paper's search algorithm pseudocode for the steps cited below
+bool DSSEProtocol::search_keyword(const std::string& user_id, 
+                                  const std::vector<uint8_t>& tw,   // Transformed keyword (location in Sr)
+                                  const std::vector<uint8_t>& KTw,  // Derived key used to locate encrypted entries in Se
+                                  uint64_t Con,                     // Counter tracking previous search instances
+                                  std::vector<uint8_t>& ID1,        // Output: Stores previous search result (explicit index Sr)
+                                  std::vector<uint8_t>& ID2,        // Output: Stores newly retrived encrypted results (encrypted index Se)
+                                  uint64_t& newCon) {               // Output: Updated counter for consistency across searches
+    if (!create_user_directory(user_id)) return false;
+
+    fs::path user_dir = storage_path / user_id;
+    fs::path se_path = user_dir / "Se.enc";
+    fs::path sr_path = user_dir / "Sr.enc";
+
+    std::ifstream sr_file(sr_path, std::ios::binary);
+    if (!sr_file) {
+        std::cerr << "[ERROR] Failed to open Sr file.\n";
+        sr_file.close();
+        return false;
+    }
+
+    std::ifstream se_file(se_path, std::ios::binary);
+    if (!se_file) {
+        std::cerr << "[ERROR] Failed to open Se file.\n";
+        se_file.close();
+        return false;
+    }
+
+    // Step 6-10: Check if Sr[tw] exists (explicit index contains results)
+    uint64_t Lcon = SYSTEM_CONSTANT;  // Default system constant
+    uint64_t prev_con = 0;
+
+    // Load Sr into memory
+    std::unordered_map<std::vector<uint8_t>, std::vector<uint8_t>, VectorHash> Sr_map;
+    while (!sr_file.eof()) {
+        std::vector<uint8_t> key(256), value(256 + 64);
+        sr_file.read(reinterpret_cast<char*>(key.data()), key.size());
+        sr_file.read(reinterpret_cast<char*>(value.data()), value.size());
+        if (sr_file.gcount() == 0) break;
+        Sr_map[key] = value;
+    }
+
+    sr_file.close();
+
+    // Check if Sr[tw] exists
+    auto it = Sr_map.find(tw);
+    if (it != Sr_map.end()) {
+        ID1.insert(ID1.end(), it->second.begin(), it->second.begin() + 256);  // Eid
+        std::memcpy(&prev_con, it->second.data() + 256, sizeof(prev_con));   // Con
+        Lcon = prev_con; // Update Lcon with prevuious search counter
+    } // otherwise proceed searching in Se
+
+    // Step 11: Iterate over Con to Lcon
+    for (uint64_t i = Con; i <= Lcon; ++i) {
+        std::vector<uint8_t> Keyw(32), Addrw(32);
+
+        // Step 12: Keyw <- H(KTw || i)
+        // Hashes KTw || i to generate a unique key (Keyw) for this iteration
+        monocypher::c::crypto_blake2b_ctx hash_ctx;
+        monocypher::c::crypto_blake2b_init(&hash_ctx, Keyw.size());
+        monocypher::c::crypto_blake2b_update(&hash_ctx, KTw.data(), KTw.size());
+        monocypher::c::crypto_blake2b_update(&hash_ctx, reinterpret_cast<const uint8_t*>(&i), sizeof(i));
+        monocypher::c::crypto_blake2b_final(&hash_ctx, Keyw.data());
+
+        // Step 13: Addrw <- H(Keyw || 1)
+        // Derive Addrw used as a pointer to the encrypted entry in Se
+        monocypher::c::crypto_blake2b_init(&hash_ctx, Addrw.size());
+        monocypher::c::crypto_blake2b_update(&hash_ctx, Keyw.data(), Keyw.size());
+        uint8_t one = 1;
+        monocypher::c::crypto_blake2b_update(&hash_ctx, &one, sizeof(one));
+        monocypher::c::crypto_blake2b_final(&hash_ctx, Addrw.data());
+
+        // Step 14: If Se[Addrw] != null
+        std::unordered_map<std::vector<uint8_t>, std::vector<uint8_t>, VectorHash> Se_map;
+        while (!se_file.eof()) {
+            std::vector<uint8_t> key(32), value(256 + 64 + 256);
+            se_file.read(reinterpret_cast<char*>(key.data()), key.size());
+            se_file.read(reinterpret_cast<char*>(value.data()), value.size());
+            if (se_file.gcount() == 0) break;
+            Se_map[key] = value;
+        }
+
+        se_file.close();
+
+        // Check if Se[Addrw] exists
+        auto se_it = Se_map.find(Addrw);
+        if (se_it != Se_map.end()) {
+            // Step 15: (Eid || i || rn) <- Se[Addrw] ⊕ H(Keyw || 0)
+            std::vector<uint8_t> Eid_i_rn(256 + 64 + 256);
+            std::vector<uint8_t> mask(256 + 64 + 256);
+
+            // Extract Se[Addrw] and decrypt it using mask H(Keyw || 0)
+            monocypher::c::crypto_blake2b_init(&hash_ctx, mask.size());
+            monocypher::c::crypto_blake2b_update(&hash_ctx, Keyw.data(), Keyw.size());
+            uint8_t zero = 0;
+            monocypher::c::crypto_blake2b_update(&hash_ctx, &zero, sizeof(zero));
+            monocypher::c::crypto_blake2b_final(&hash_ctx, mask.data());
+
+            for (size_t j = 0; j < Eid_i_rn.size(); ++j) {
+                Eid_i_rn[j] = se_it->second[j] ^ mask[j];
+            }
+
+            // Step 16: ID2 <- ID2 ∪ {Eid || i}
+            // Store encrypted results for the client to decrypt later.
+            ID2.insert(ID2.end(), Eid_i_rn.begin(), Eid_i_rn.begin() + 256 + 64);
+
+            // Step 17: Delete Se[Addrw]
+            // Ensures forward security by removing the processed entry
+            Se_map.erase(se_it);
+
+            // Step 18-22: Follow rn chain
+            std::vector<uint8_t> rn(Eid_i_rn.begin() + 256 + 64, Eid_i_rn.end());
+            while (!std::all_of(rn.begin(), rn.end(), [](uint8_t b) { return b == 0; })) {  // rn != 0
+                // Compute next Addrw
+                monocypher::c::crypto_blake2b_init(&hash_ctx, Addrw.size());
+                monocypher::c::crypto_blake2b_update(&hash_ctx, Addrw.data(), Addrw.size());
+                monocypher::c::crypto_blake2b_update(&hash_ctx, rn.data(), rn.size());
+                monocypher::c::crypto_blake2b_final(&hash_ctx, Addrw.data());
+
+                // Repeat decryption and add to ID2
+                se_it = Se_map.find(Addrw);
+                if (se_it == Se_map.end()) break;
+
+                for (size_t j = 0; j < Eid_i_rn.size(); ++j) {
+                    Eid_i_rn[j] = se_it->second[j] ^ mask[j];
+                }
+
+                ID2.insert(ID2.end(), Eid_i_rn.begin(), Eid_i_rn.begin() + 256 + 64);
+                rn.assign(Eid_i_rn.begin() + 256 + 64, Eid_i_rn.end());
+                Se_map.erase(se_it);
+            }
+        }
+    }
+
+    newCon = Lcon + 1;
+    std::cout << "[1/2] Search Step 1 completed for user: " << user_id << "\n";
+    return true;
+}
+
+
+// NOTE: Refer to the paper's search algorithm pseudocode for the steps cited below
+bool DSSEProtocol::search_finalize(const std::string& user_id,
+                                   const std::vector<uint8_t>& tw,  // Transformed keyword (location in Sr)
+                                   const std::vector<uint8_t>& ID1, // Final results from the client after filtering
+                                   uint64_t Con) {                  // Counter tracking previous search instances
+    if (!create_user_directory(user_id)) return false;
+
+    fs::path sr_path = storage_path / user_id / "Sr.enc";
+
+    std::unordered_map<std::vector<uint8_t>, std::vector<uint8_t>, VectorHash> Sr_map;
+
+    std::ifstream sr_file(sr_path, std::ios::binary);
+    if (!sr_file) {
+        std::cerr << "[ERROR] Failed to open Sr file.\n";
+        sr_file.close();
+        return false;
+    }
+
+    // Load Sr into memory
+    while (!sr_file.eof()) {
+        std::vector<uint8_t> key(256), value(256 + 64);
+        sr_file.read(reinterpret_cast<char*>(key.data()), key.size());
+        sr_file.read(reinterpret_cast<char*>(value.data()), value.size());
+        if (sr_file.gcount() == 0) break;
+        Sr_map[key] = value;
+    }
+
+    sr_file.close();
+
+    // Step 31: Store plaintext search results
+    // Update Sr[tw] with the new values
+    Sr_map[tw].clear();
+    Sr_map[tw].insert(Sr_map[tw].end(), ID1.begin(), ID1.end());
+    Sr_map[tw].insert(Sr_map[tw].end(), reinterpret_cast<uint8_t*>(&Con), 
+                      reinterpret_cast<uint8_t*>(&Con) + sizeof(Con));
+
+    // Overwrite Sr file
+    std::ofstream sr_out(sr_path, std::ios::binary | std::ios::trunc);
+    if (!sr_out) {
+        std::cerr << "[ERROR] Failed to overwrite Sr.\n";
+        sr_out.close();
+        return false;
+    }
+    for (const auto& entry : Sr_map) {
+        sr_out.write(reinterpret_cast<const char*>(entry.first.data()), entry.first.size());
+        sr_out.write(reinterpret_cast<const char*>(entry.second.data()), entry.second.size());
+    }
+
+    sr_out.close();
+
+    std::cout << "[✓] Search completed for user: " << user_id << "\n";
+    return true;
+}

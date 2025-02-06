@@ -21,4 +21,5 @@ void Keystore<lambda>::wipe_keys() {
     key_g.wipe();
     key_f.wipe();
     key_t.wipe();
+    con.fill(0xff);
 }

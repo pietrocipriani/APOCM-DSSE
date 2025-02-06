@@ -30,7 +30,7 @@ void Protocol<lambda>::setup() {
 }
 
 template<size_t lambda>
-void Protocol<lambda>::add([[maybe_unused]] const ArgsAdd& args) {
+void Protocol<lambda>::add(const ArgsAdd& args) {
 
     // NOTE: memory issues can arise.
     KTMap index;
@@ -43,8 +43,9 @@ void Protocol<lambda>::add([[maybe_unused]] const ArgsAdd& args) {
     auto encrypted_index = process(Operation::add, index);
     auto docs = encrypt_documents(args);
 
-    keystore.wipe();
+    keystore.wipe_keys();
 
+    send("add-----");
     send(encrypted_index);
     send(docs);
 
@@ -74,43 +75,65 @@ Protocol<lambda>::Protocol(const sockpp::unix_address& server_addr) {
 }
 
 template<size_t lambda>
-Data Protocol<lambda>::process(Operation op, const KTMap& index) const {
-    // Blake2b as prf and hash function.
+Protocol<lambda>::Data Protocol<lambda>::process(Operation op, const KTMap& index) const {
+    // Blake2b as prf (keyed) and hash (unkeyed) function.
     using prf = monocypher::hash<monocypher::Blake2b<32>>;
-    using hash = monocypher::hash<monocypher::Blake2b<32>>;
-    using prp = monocypher::symmetric_key;
-    using value = byte_array<hash::Size + sizeof(uint64_t) + hash::Size>;
+    using hash = monocypher::hash<monocypher::Blake2b<64>>;
+    using prp = monocypher::session::encryption_key<monocypher::XChaCha20_Poly1305>;
+    using key = monocypher::byte_array<hash::Size>;
+    using value = monocypher::byte_array<hash::Size + decltype(Keystore<lambda>::con)::byte_count + hash::Size>;
 
-    unordered_map<hash, value> encrypted_index;
+    std::unordered_map<key, value> encrypted_index;
 
-    for (auto& [keyword, docs] : index) { // TODO: find how to do this.
+    for (auto& [keyword, docs] : index) {
         auto [start, end] = index.equal_range(keyword);
 
-        // TODO: keywords should be erased to avoid to correlate keys with hashes.
-        auto kt = prf::createMAC(keyword, keystore.key_f);
+        auto kt = prf::createMAC(keyword.data(), keyword.length(), keystore.key_f);
+
         auto key = hash::create(kt | keystore.con);
-        auto addr = hash::create(key | 1);
+        monocypher::byte_array addr = hash::create(key | one<1>);
 
         for (auto& uuid : docs) {
-            byte_array<hash::Size> rn(0);
+            monocypher::byte_array<hash::Size> rn(0);
 
             // If this is not the last document, then rn must be a non-zero random sequence.
-            while (std::next(start) != end && rn == byte_array(0)) {
-                rn.random();
+            while (std::next(start) != end and rn == zero<hash::Size>) {
+                rn.randomize();
             }
 
-            auto sk = prf::createMAC(keyword | keystore.con, keystore.key_g);
-            auto eid = prp::lock(uuid | op, sk);
-            static_assert(dectype(eid)::Size == hash::Size);
+            // NOTE: like in the paper.
+            // It is possible to only compute sk once, however in this case it is 
+            // not possible to wipe it, so it will reside in memory longer.
+            // However sk is completely obtainable from other secrets stored in memory.
+            // This doesn't allow to clear the keyword, allowing to create correspondences
+            // between keywords and kts in case of memory dumps.
+            auto sk_plain = keyword | keystore.con;
+            auto sk = prf::createMAC(sk_plain.data(), sk_plain.size(), keystore.key_g);
+            monocypher::wipe(sk_plain.data(), sk_plain.size());
 
-            auto val = (hash::create(key | 0) ^ eid) | con | rn;
+            // randomized nonce. It MUST NOT be reused.
+            monocypher::session::nonce nonce{};
+            auto op_id = std::to_underlying(op);
+            auto data = uuid | monocypher::byte_array<8>(op_id);
+            auto mac = prp(sk).lock(nonce, data.data(), data.size(), data.data());
+            sk.wipe();
+            auto eid = mac | nonce | data;
+
+            auto val = (hash::create(key | zero<1>) ^ eid) | keystore.con | rn;
 
             encrypted_index[addr] = val;
 
-            addr ^= rn;
+            addr = addr ^ rn;
         }
     }
 
-    // TODO: convert encrypted_index to data.
+    Data result; result.reserve(encrypted_index.size() * (hash::Size + value::byte_count));
+
+    for (auto& [key, value] : encrypted_index) {
+        auto row = key | value;
+        result.insert(result.end(), row.begin(), row.end());
+    }
+
+    return result;
 }
 

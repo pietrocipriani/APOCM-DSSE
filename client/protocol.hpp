@@ -8,7 +8,8 @@
 #include <Monocypher.hh>
 #include <vector>
 #include <unordered_map>
-#include <uuid.h>
+#include <unordered_set>
+#include <uuid/uuid.h>
 
 
 #include "keystore.hpp"
@@ -18,7 +19,7 @@ template<size_t lambda = 32>
 class Protocol {
 private:
     enum class Operation { add, remove };
-    using KTMap = std::unordered_map<std::string, unordered_set<uuid_t>>;
+    using KTMap = std::unordered_map<std::string, std::unordered_set<monocypher::byte_array<sizeof(uuid_t)>>>;
     using Data = std::vector<uint8_t>;
 
     Keystore<lambda> keystore;
@@ -32,6 +33,9 @@ private:
     Data encrypt_documents(const ArgsAdd& args);
 
     void send(const std::vector<uint8_t>& data);
+    void send(const char* data);
+
+    void print_response();
 
 public:
     

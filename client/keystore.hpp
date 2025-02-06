@@ -5,15 +5,15 @@
 template<size_t lambda>
 class Keystore {
 private:
-
-    // NOTE: encrypted keys
+public:
 
     // Documents encryption key
     monocypher::secret_byte_array<lambda> key_d;
     
     monocypher::secret_byte_array<lambda> key_g, key_f, key_t;
 
-public:
+    monocypher::byte_array<8> con{0xff};
+
     
     void load_keys();
 
@@ -23,6 +23,7 @@ public:
         key_g.randomize();
         key_f.randomize();
         key_t.randomize();
+        con.fill(0xff);
     }
     
     void store_keys();

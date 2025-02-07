@@ -77,3 +77,9 @@ struct std::hash<monocypher::byte_array<size>> {
         return h;
     }   
 };
+
+
+template<typename T>
+monocypher::byte_array<sizeof(T)> serialize(const T& val) {
+    return monocypher::byte_array<sizeof(T)>(reinterpret_cast<const void*>(&val), sizeof(T));
+}

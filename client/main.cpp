@@ -6,7 +6,7 @@
 #include <functional>
 #include <sockpp/unix_stream_socket.h>
 
-#define SOCK_ADDR "\0dsse_apocm"
+#define SOCK_ADDR "/tmp/dsse_apocm"
 
 int main(int argc, const char **argv) {
     sockpp::initialize();

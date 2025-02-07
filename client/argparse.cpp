@@ -29,8 +29,14 @@ std::optional<Action> parse_action(const std::string& raw_action) {
 }
 
 
-ArgsAdd parse_add([[maybe_unused]] int argc, [[maybe_unused]] const char **argv) {
-    return {};
+ArgsAdd parse_add(int argc, const char **argv) {
+    ArgsAdd args{};
+
+    for (int i = 0; i < argc; ++i) {
+        args.paths.emplace_back(argv[i]);
+    }
+
+    return args;
 }
 ArgsRemove parse_remove([[maybe_unused]] int argc, [[maybe_unused]] const char **argv) {
     return {};
@@ -70,7 +76,7 @@ Args parse_action(int argc, const char **argv) {
         argc -= 2;
         // NOTE: argv can become invalid, however only if argc == 0.
         // Set to null to trigger exceptions in case of coding errors.
-        argv = argc == 0 ? nullptr : argv - 2;
+        argv = argc == 0 ? nullptr : argv + 2;
         
         return parse_args(action, argc, argv);
     } else {

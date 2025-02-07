@@ -4,13 +4,16 @@
 #include <vector>
 #include <variant>
 #include <cstdint>
+#include <filesystem>
+#include <uuid/uuid.h>
+#include <Monocypher.hh>
 
 
 enum class Action { add = 0, remove = 1, search = 2 };
 
-using Path = std::string;
+using Path = std::filesystem::path;
 using Keyword = std::string;
-using DocId = uint64_t;
+using DocId = monocypher::byte_array<sizeof(uuid_t)>;
 
 struct ArgsAdd { std::vector<Path> paths; };
 struct ArgsRemove { std::vector<DocId> ids; };

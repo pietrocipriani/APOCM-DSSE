@@ -41,6 +41,21 @@ bool DSSEProtocol::create_user_directory(const std::string& user_id) {
             std::cerr << "[ERROR] Failed to create user directory: " << user_id << "\n";
             return false;
         }
+
+        // Initialize Se and Sr files
+        std::ofstream se_file(user_dir / "Se.enc", std::ios::binary | std::ios::trunc);
+        if (!se_file) {
+            std::cerr << "[ERROR] Failed to create Se file.\n";
+            se_file.close();
+            return false;
+        }
+
+        std::ofstream sr_file(user_dir / "Sr.enc", std::ios::binary | std::ios::trunc);
+        if (!sr_file) {
+            std::cerr << "[ERROR] Failed to create Sr file.\n";
+            sr_file.close();
+            return false;
+        }
     }
     return true;
 }
@@ -67,8 +82,8 @@ bool DSSEProtocol::init_encrypted_index(const std::string& user_id,
     fs::path se_path = user_dir / "Se.enc";
     fs::path sr_path = user_dir / "Sr.enc";
 
-    constexpr size_t SE_ENTRY_SIZE = 256 + 64 + 256;  // Key(256) + Value(256+64+256)
-    constexpr size_t SR_ENTRY_SIZE = 256;  // Assume 256 bytes for Sr row
+    constexpr size_t SE_ENTRY_SIZE = 256 + 64 + 8 + 256;  // Key (256 bytes) || Eid (64 bytes) || Con (8 bytes) || rn (256 bytes)
+    constexpr size_t SR_ENTRY_SIZE = 256 + 64;  // Key (256) + Con (64)
     
     // Validate input sizes
     if (Se_serialized.size() % SE_ENTRY_SIZE != 0) {
@@ -249,7 +264,7 @@ bool DSSEProtocol::search_keyword(const std::string& user_id,
     // Load Sr into memory
     std::unordered_map<std::vector<uint8_t>, std::vector<uint8_t>, VectorHash> Sr_map;
     while (!sr_file.eof()) {
-        std::vector<uint8_t> key(256), value(256 + 64);
+        std::vector<uint8_t> key(512), value(512 + 64 + 512);
         sr_file.read(reinterpret_cast<char*>(key.data()), key.size());
         sr_file.read(reinterpret_cast<char*>(value.data()), value.size());
         if (sr_file.gcount() == 0) break;
@@ -302,8 +317,8 @@ bool DSSEProtocol::search_keyword(const std::string& user_id,
         auto se_it = Se_map.find(Addrw);
         if (se_it != Se_map.end()) {
             // Step 15: (Eid || i || rn) <- Se[Addrw] ⊕ H(Keyw || 0)
-            std::vector<uint8_t> Eid_i_rn(256 + 64 + 256);
-            std::vector<uint8_t> mask(256 + 64 + 256);
+            std::vector<uint8_t> Eid_i_rn(512 + 64 + 512);
+            std::vector<uint8_t> mask(512 + 64 + 512);
 
             // Extract Se[Addrw] and decrypt it using mask H(Keyw || 0)
             monocypher::c::crypto_blake2b_init(&hash_ctx, mask.size());
@@ -318,7 +333,7 @@ bool DSSEProtocol::search_keyword(const std::string& user_id,
 
             // Step 16: ID2 <- ID2 ∪ {Eid || i}
             // Store encrypted results for the client to decrypt later.
-            ID2.insert(ID2.end(), Eid_i_rn.begin(), Eid_i_rn.begin() + 256 + 64);
+            ID2.insert(ID2.end(), Eid_i_rn.begin(), Eid_i_rn.begin() + 64 + 8);
 
             // Step 17: Delete Se[Addrw]
             // Ensures forward security by removing the processed entry
@@ -374,7 +389,7 @@ bool DSSEProtocol::search_finalize(const std::string& user_id,
 
     // Load Sr into memory
     while (!sr_file.eof()) {
-        std::vector<uint8_t> key(256), value(256 + 64);
+        std::vector<uint8_t> key(256), value(256 + 64); // TODO: change to 512
         sr_file.read(reinterpret_cast<char*>(key.data()), key.size());
         sr_file.read(reinterpret_cast<char*>(value.data()), value.size());
         if (sr_file.gcount() == 0) break;

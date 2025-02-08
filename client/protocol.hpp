@@ -11,6 +11,7 @@
 #include <unordered_set>
 #include <uuid/uuid.h>
 #include <filesystem>
+#include <stdexcept>
 
 
 #include "keystore.hpp"
@@ -21,7 +22,7 @@ class Protocol {
 private:
     enum class Operation { add, remove };
     using KTMap = std::unordered_map<std::string, std::unordered_set<DocId>>;
-    using DocMap = std::unordered_map<std::filesystem::path, DocId>;
+    using DocMap = std::unordered_map<DocId, std::string>;
     using Data = std::vector<uint8_t>;
 
     Keystore<lambda> keystore;
@@ -32,7 +33,7 @@ private:
     void setup();
 
     Data process(Operation op, const KTMap& index) const;
-    Data encrypt_documents(const DocMap& args);
+    Data encrypt_documents(DocMap& args);
 
     void send(const Data& data);
     void send(const uint8_t* data, size_t size);
@@ -41,6 +42,24 @@ private:
     template<typename T>
     void send(const T& val) {
         send(reinterpret_cast<const uint8_t*>(&val), sizeof(T));
+    }
+
+
+    template<typename T>
+    T recv() {
+        T result;
+        if (auto res = sock.read_n(&result, sizeof(T)); !res || res != sizeof(T)) {
+            throw std::runtime_error("Unable to read");
+        }
+        return result;
+    }
+    template<size_t size>
+    monocypher::byte_array<size> recv() {
+        monocypher::byte_array<size> result;
+        if (auto res = sock.read_n(result.data(), size); !res || res != size) {
+            throw std::runtime_error("Unable to read");
+        }
+        return result;
     }
 
     void print_response();
@@ -60,4 +79,4 @@ public:
 
 
 template class Protocol<32>;
-template class Protocol<64>;
+//template class Protocol<64>;

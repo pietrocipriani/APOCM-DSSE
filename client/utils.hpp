@@ -83,3 +83,13 @@ template<typename T>
 monocypher::byte_array<sizeof(T)> serialize(const T& val) {
     return monocypher::byte_array<sizeof(T)>(reinterpret_cast<const void*>(&val), sizeof(T));
 }
+
+
+template<size_t size>
+monocypher::byte_array<size>& operator--(monocypher::byte_array<size>& array) {
+    // NOTE: little endian.
+    size_t index = 0;
+    while (index < size && array[index++]-- == 0);
+
+    return array;
+} 

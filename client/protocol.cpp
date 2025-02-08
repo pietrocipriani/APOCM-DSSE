@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <iterator>
 #include <fstream>
+#include <regex>
 
 
 template<size_t lambda>
@@ -34,33 +35,54 @@ void Protocol<lambda>::setup() {
 
 template<size_t lambda>
 void Protocol<lambda>::add(const ArgsAdd& args) {
-    DocMap uuids;
+    DocMap documents;
 
-    // Map documents to uuids
+    // Read documents.
     for (auto& path : args.paths) {
         if (!std::filesystem::is_regular_file(path)) {
             std::cerr << path << " doesn't exists or is not a regular file: ignored." << std::endl;
             continue;
         }
 
-        DocId uuid;
-        uuid_generate(uuid.data());
+        // NOTE: duplicate files are not removed.
 
-        // NOTE: there is no interest in avoiding duplicate files: best effort.
-        uuids[path] = uuid;
+        DocId uuid; uuid_generate(uuid.data());
+
+        // TODO: manage exceptions.
+        std::ifstream file(path, std::ios_base::in | std::ios_base::binary);
+
+        if (file.good()) {
+            std::string content(std::istreambuf_iterator<char>(file), {});
+            documents[uuid] = std::move(content);
+        } else {
+            std::cerr << "Error while reading file " << path << ": ignored." << std::endl;
+        }
     }
 
-    // NOTE: memory issues can arise.
     KTMap index;
-    // TODO: fill map.
+
+    // Extract keywords
+    std::regex exp("[a-zA-Z0-9]+");
+    for (const auto& [uuid, content] : documents) {
+
+        std::sregex_iterator begin(content.begin(), content.end(), exp);
+        std::sregex_iterator end{};
+        for (; begin != end; ++begin) {
+            index[begin->str()].insert(uuid);
+        }
+
+    }
 
     
     load_or_setup_keys();
 
     // NOTE: this can lead to memory issues, however sending while encrypting increases the key exposure in memory.
     auto encrypted_index = process(Operation::add, index);
-    auto docs = encrypt_documents(uuids);
+    auto docs = encrypt_documents(documents);
 
+    // Con has changed.
+    --keystore.con;
+    keystore.store_keys();
     keystore.wipe_keys();
 
     send(0); // add operation
@@ -82,37 +104,79 @@ void Protocol<lambda>::search(const ArgsSearch& args) {
     using prf = monocypher::hash<monocypher::Blake2b<32>>;
     using hash = monocypher::hash<monocypher::Blake2b<64>>;
     using prp = monocypher::session::encryption_key<monocypher::XChaCha20_Poly1305>;
-    using key = monocypher::byte_array<hash::Size>;
-    using value = monocypher::byte_array<hash::Size + decltype(Keystore<lambda>::con)::byte_count + hash::Size>;
 
-    load_or_setup_keys();
+    keystore.load_keys();
 
-    t = prf::createMAC(args.key.data(), args.key.size(), keystore.key_t);
-    kt = prf::createMAC(args.key.data(), args.key.size(), keystore.key_f);
+    const auto& keyword = args.keyword;
+    auto t = prf::createMAC(keyword.data(), keyword.size(), keystore.key_t);
+    auto kt = prf::createMAC(keyword.data(), keyword.size(), keystore.key_f);
 
-    // TODO: wipe or encrypt with temp key the keystore during these possibly long-term operations.
+    keystore.wipe_keys();
 
     send(2);
-    send(keystore.con);
     send(t);
+    t.wipe();
     send(kt);
+    kt.wipe();
+    send(keystore.con);
 
-    auto count = recv<size_t>();
+    auto count_1 = recv<size_t>();
+    auto count_2 = recv<size_t>();
 
-    for (size_t i = 0; i < count; ++i) {
+    using hash_t = monocypher::byte_array<hash::Size>;
+    using Con = decltype(keystore.con);
+
+    std::unordered_set<DocId> id1;
+    std::unordered_set<DocId> removals;
+    std::vector<std::pair<hash_t, Con>> id2; 
+
+    for (size_t i = 0; i < count_1; ++i) {
+        auto uuid = recv<DocId::byte_count>();
+        id1.insert(uuid);
+    }
+    for (size_t i = 0; i < count_2; ++i) {
         auto eid = recv<hash::Size>();
         auto con = recv<sizeof(keystore.con)>();
 
-        auto sk_plain = keyword | keystore.con;
+        id2.emplace_back(eid, con);
+    }
+
+    keystore.load_keys();
+    for (auto& [eid, con] : id2) {
+        auto sk_plain = keyword | con;
         auto sk = prf::createMAC(sk_plain.data(), sk_plain.size(), keystore.key_g);
         monocypher::wipe(sk_plain.data(), sk_plain.size());
 
-        auto deid = prp::unlock(eid);
-        auto uuid = deid.range<0, DocId::byte_count>();
-        auto op = deid.range<DocId::byte_count, 8>();
+        using Mac = monocypher::session::mac;
+        using Nonce = monocypher::session::nonce;
+
+        Mac mac(eid.template range<0, Mac::byte_count>());
+        Nonce nonce(eid.template range<decltype(mac)::byte_count, Nonce::byte_count>());
+
+        if (auto ok = prp(sk).unlock(nonce, mac, eid, eid.data()); !ok) {
+            std::cerr << "Corrupted data" << std::endl;
+            continue;
+        }
+        auto uuid = eid.template range<0, DocId::byte_count>();
+        auto op = eid[DocId::byte_count];
+
+        // Without guarantees about the receiving order it is better to only remove 
+        // after insertions.
+        if (op == 0) {
+            id1.insert(uuid);
+        } else {
+            removals.insert(uuid);
+        }
     }
 
+    keystore.wipe_keys();
 
+    for (auto& uuid : removals) id1.erase(uuid);
+
+    send(id1.size());
+    for (auto& uuid : id1) send(uuid);
+
+    // TODO: read documents.
 }
 
 template<size_t lambda>
@@ -124,8 +188,8 @@ Protocol<lambda>::Protocol(const sockpp::unix_address& server_addr) {
     }
 
     // TODO: ensure the server authenticity.
-    auto auth = sock.get_option<int>(SOL_SOCKET, SO_PEERCRED);
-    std::cerr << "Server credentials: " << auth.value() << std::endl;
+    auto pid = sock.get_option<int>(SOL_SOCKET, SO_PEERCRED);
+    std::cerr << "Server credentials: " << pid.value() << std::endl;
 
 }
 
@@ -170,7 +234,6 @@ Protocol<lambda>::Data Protocol<lambda>::process(Operation op, const KTMap& inde
             monocypher::session::nonce nonce{};
             auto op_id = std::to_underlying(op);
             auto data = uuid | monocypher::byte_array<8>(op_id);
-            // TODO: check if it is necessary to put nonce into AD.
             auto mac = prp(sk).lock(nonce, data.data(), data.size(), data.data());
             sk.wipe();
             auto eid = mac | nonce | data;
@@ -183,7 +246,6 @@ Protocol<lambda>::Data Protocol<lambda>::process(Operation op, const KTMap& inde
         }
     }
 
-    // TODO: decrement con.
 
     Data result; result.reserve(encrypted_index.size() * (hash::Size + value::byte_count));
 
@@ -220,20 +282,17 @@ void Protocol<lambda>::print_response() {
 
 
 template<size_t lambda>
-Protocol<lambda>::Data Protocol<lambda>::encrypt_documents(const DocMap& args) {
+Protocol<lambda>::Data Protocol<lambda>::encrypt_documents(DocMap& args) {
     using prp = monocypher::session::encryption_key<monocypher::XChaCha20_Poly1305>;
 
     Data result;
 
-    for (const auto& [path, uuid] : args) {
-        // TODO: check existence and readability.
-        std::ifstream file(path, std::ios_base::in | std::ios_base::binary);
-
-        std::vector content(std::istreambuf_iterator<char>(file), {});
-
+    for (auto& [uuid, content] : args) {
 
         // NOTE: the nonce must be different for every encryption.
+        // 192-bit random nonce is considered safe.
         monocypher::session::nonce nonce{};
+        static_assert(monocypher::session::nonce::byte_count == 24);
 
         auto ad = uuid | serialize(content.size());
         auto mac = prp(keystore.key_d).lock(

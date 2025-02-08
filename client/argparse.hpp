@@ -17,7 +17,7 @@ using DocId = monocypher::byte_array<sizeof(uuid_t)>;
 
 struct ArgsAdd { std::vector<Path> paths; };
 struct ArgsRemove { std::vector<DocId> ids; };
-struct ArgsSearch { std::vector<Keyword> keywords; };
+struct ArgsSearch { Keyword keyword; };
 
 using Args = std::variant<ArgsAdd, ArgsRemove, ArgsSearch>;
 

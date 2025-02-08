@@ -23,7 +23,6 @@ void read_password(std::array<char, buf_size>& buf, const char* prompt = "Passwo
     auto res = readpassphrase(prompt, buf.data(), buf_size, RPP_REQUIRE_TTY | RPP_SEVENBIT);
 
     if (res == nullptr) {
-        // NOTE: Probably non-necessary clear.
         monocypher::wipe(buf.data(), buf_size);
         // TODO: change exception
         throw KeysNotFound("Passoword not submitted");

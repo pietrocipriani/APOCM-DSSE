@@ -7,7 +7,7 @@
 
 namespace fs = std::filesystem;
 
-constexpr uint64_t SYSTEM_CONSTANT = -2;
+constexpr uint64_t SYSTEM_CONSTANT = -2ULL;
 
 // Custom hash function for std::vector<uint8_t> to use in std::unordered_map
 struct VectorHash {

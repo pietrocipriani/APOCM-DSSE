@@ -130,7 +130,7 @@ void DSSEServer::handle_client(sockpp::unix_stream_socket client_sock) {
         std::cout << "[✓] Search step 1 response sent. Waiting for client confirmation...\n";
 
         // Step 2: Receive final confirmation (ID1 + Con)
-        uint32_t final_ID1_size;
+        size_t final_ID1_size;
         if (!receive_exact(client_sock, &final_ID1_size, sizeof(final_ID1_size))) {
             std::cerr << "[ERROR] Failed to receive final ID1 size.\n";
             return;

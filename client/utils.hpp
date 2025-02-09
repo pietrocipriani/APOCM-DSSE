@@ -4,6 +4,8 @@
 #include <vector>
 #include <cstdint>
 #include <Monocypher.hh>
+#include <iostream>
+#include <iomanip>
 
 
 template<typename... Fs>
@@ -97,3 +99,11 @@ monocypher::byte_array<size>& operator--(monocypher::byte_array<size>& array) {
 
     return array;
 } 
+
+template<size_t size>
+void hexprint(const monocypher::byte_array<size>& array) {
+    for (size_t i = size; i > 0; --i) {
+        std::clog << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(array[i - 1]);
+    }
+    std::clog << std::endl;
+}

@@ -66,6 +66,7 @@ void Keystore<lambda>::load_keys() {
     key_t = monocypher::secret_byte_array(data.template range<2*lambda, lambda>());
     key_f = monocypher::secret_byte_array(data.template range<3*lambda, lambda>());
     con = data.template range<4*lambda, 8>();
+
 }
 
 template<size_t lambda>

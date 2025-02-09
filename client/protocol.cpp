@@ -116,6 +116,8 @@ void Protocol<lambda>::search(const ArgsSearch& args) {
     auto t = prf::createMAC(keyword.data(), keyword.size(), keystore.key_t);
     auto kt = prf::createMAC(keyword.data(), keyword.size(), keystore.key_f);
 
+    // Store con to send it to the server.
+    auto con = keystore.con;
     keystore.wipe_keys();
 
     send(2);
@@ -123,12 +125,24 @@ void Protocol<lambda>::search(const ArgsSearch& args) {
     t.wipe();
     send(kt);
     kt.wipe();
-    send(keystore.con);
+    send(con);
     
     std::clog << "[+] Reading first response." << std::endl;
 
     auto count_1 = recv<size_t>();
     auto count_2 = recv<size_t>();
+
+    if (count_1 % DocId::byte_count != 0) {
+        throw std::runtime_error("Corrupted response");
+        abort();
+    }
+    count_1 /= DocId::byte_count;
+    
+    if (count_2 % (hash::Size + decltype(keystore.con)::byte_count) != 0) {
+        throw std::runtime_error("Corrupted response");
+        abort();
+    }
+    count_2 /= hash::Size + decltype(keystore.con)::byte_count;
 
     using hash_t = monocypher::byte_array<hash::Size>;
     using Con = decltype(keystore.con);
@@ -160,14 +174,16 @@ void Protocol<lambda>::search(const ArgsSearch& args) {
         using Nonce = monocypher::session::nonce;
 
         Mac mac(eid.template range<0, Mac::byte_count>());
-        Nonce nonce(eid.template range<decltype(mac)::byte_count, Nonce::byte_count>());
+        Nonce nonce(eid.template range<Mac::byte_count, Nonce::byte_count>());
+        auto data = eid.template range<40, 24>();
 
-        if (auto ok = prp(sk).unlock(nonce, mac, eid, eid.data()); !ok) {
-            std::cerr << "Corrupted data" << std::endl;
+        if (auto ok = prp(sk).unlock(nonce, mac, data, data.data()); !ok) {
+            std::cerr << "[WARN] Corrupted data." << std::endl;
             continue;
         }
-        auto uuid = eid.template range<0, DocId::byte_count>();
-        auto op = eid[DocId::byte_count];
+        auto uuid = data.template range<0, DocId::byte_count>();
+        // Serialized as 8B, little endian.
+        auto op = data[DocId::byte_count];
 
         // Without guarantees about the receiving order it is better to only remove 
         // after insertions.
@@ -178,8 +194,6 @@ void Protocol<lambda>::search(const ArgsSearch& args) {
         }
     }
     
-    // Store con to send it to the server.
-    auto con = keystore.con;
 
     keystore.wipe_keys();
 
@@ -192,13 +206,7 @@ void Protocol<lambda>::search(const ArgsSearch& args) {
         std::cout << "No results." << std::endl;
     }
     for (auto& uuid : id1) {
-        // NOTE: temporary user feedback
-        std::cout << std::hex << std::setfill('0');
-        for (uint8_t byte : uuid) {
-            std::cout << std::setw(2) << static_cast<int>(byte);
-        }
-        std::cout << std::endl;
-
+        hexprint(uuid);
         send(uuid);
     }
 
@@ -235,18 +243,17 @@ Protocol<lambda>::Data Protocol<lambda>::process(Operation op, const KTMap& inde
 
     // Encrypt the index
     for (auto& [keyword, docs] : index) {
-        auto [start, end] = index.equal_range(keyword);
-
         auto kt = prf::createMAC(keyword.data(), keyword.length(), keystore.key_f);
 
         auto key = hash::create(kt | keystore.con);
         monocypher::byte_array addr = hash::create(key | one<1>);
 
-        for (auto& uuid : docs) {
+        for (auto it = docs.begin(); it != docs.end(); ++it) {
+            auto& uuid = *it;
             monocypher::byte_array<hash::Size> rn(0);
 
             // If this is not the last document, then rn must be a non-zero random sequence.
-            while (std::next(start) != end and rn == zero<hash::Size>) {
+            while (std::next(it) != docs.end() and rn == zero<hash::Size>) {
                 rn.randomize();
             }
 

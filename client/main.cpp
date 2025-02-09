@@ -16,7 +16,7 @@ int main(int argc, const char **argv) {
     try {
         args = parse_action(argc, argv);
     } catch (const std::invalid_argument& e) {
-        std::cerr << e.what() << std::endl;
+        std::cerr << "[ERROR]" << e.what() << "." << std::endl;
         return EXIT_FAILURE;
     }
 
@@ -32,13 +32,13 @@ int main(int argc, const char **argv) {
         }, args);
 
     } catch (const KeysNotFound& e) {
-        std::cerr << e.what() << std::endl;
+        std::cerr << "[ERROR]" << e.what() << "." << std::endl;
         return EXIT_FAILURE;
     } catch (const CorruptedKeys& e) {
-        std::cerr << e.what() << std::endl;
+        std::cerr << "[ERROR]" << e.what() << "." << std::endl;
         return EXIT_FAILURE;
     } catch (const std::runtime_error& e) {
-        std::cerr << e.what() << std::endl;
+        std::cerr << "[ERROR]" << e.what() << "." << std::endl;
         return EXIT_FAILURE;
     }
 

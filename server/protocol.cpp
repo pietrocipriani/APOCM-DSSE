@@ -268,7 +268,7 @@ bool DSSEProtocol::search_keyword(const std::string& user_id,
     // Load Sr into memory
     std::unordered_map<std::vector<uint8_t>, std::vector<uint8_t>, VectorHash> Sr_map;
     while (!sr_file.eof()) {
-        std::vector<uint8_t> key(64);
+        std::vector<uint8_t> key(32);
         sr_file.read(reinterpret_cast<char*>(key.data()), key.size());
         if (sr_file.gcount() == 0) break;
         size_t length;
@@ -438,11 +438,11 @@ bool DSSEProtocol::search_finalize(const std::string& user_id,
         sr_out.close();
         return false;
     }
-    for (const auto& entry : Sr_map) {
-        sr_out.write(reinterpret_cast<const char*>(entry.first.data()), entry.first.size());
-        size_t length = entry.second.size();
+    for (const auto& [key, value] : Sr_map) {
+        sr_out.write(reinterpret_cast<const char*>(key.data()), key.size());
+        size_t length = value.size();
         sr_out.write(reinterpret_cast<const char*>(&length), sizeof(length));
-        sr_out.write(reinterpret_cast<const char*>(entry.second.data()), entry.second.size());
+        sr_out.write(reinterpret_cast<const char*>(value.data()), value.size());
     }
 
     sr_out.close();

@@ -11,7 +11,7 @@
 DSSEServer* server_instance = nullptr;
 
 // Gracefully handle SIGINT (Ctrl+C) to stop the server
-void handle_signal(int signal) {
+void handle_signal([[maybe_unused]] int signal) {
     if (server_instance) {
         std::cout << "\n[!] Shutting down DSSE Server...\n";
         delete server_instance;

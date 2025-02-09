@@ -2,9 +2,10 @@
 
 #include <Monocypher.hh>
 #include <bsd/readpassphrase.h>
+#include <iostream>
 
 
-using argon2id = monocypher::argon2<monocypher::Argon2id, 64, 100000, 3>;
+using argon2id = monocypher::argon2<monocypher::Argon2id, 32, 400000, 3>;
 
 
 /// Checks if the password is secure.
@@ -46,12 +47,23 @@ void obtain_secure_password(std::array<char, buf_size>& password, const char* pr
 
 // NOTE: both argon2id::salt and argon2id::hash are secret_byte_arrays and are automatically wiped.
 /// Creates a salted hash for a password that is storable.
+/// The password is internally cleared.
 template<size_t buf_size>
-std::pair<argon2id::salt, argon2id::hash> storable_password(std::array<char, buf_size>& password) {
+std::pair<argon2id::hash, argon2id::salt> derive_key(std::array<char, buf_size>& password) {
     auto hashed_password = argon2id::create(password.data(), strlen(password.data()));
-    monocypher::wipe(password, buf_size);
+    monocypher::wipe(password.data(), buf_size);
 
     return hashed_password;
 }
 
 
+// NOTE: both argon2id::salt and argon2id::hash are secret_byte_arrays and are automatically wiped.
+/// Creates a salted hash for a password that is storable.
+/// The password is internally cleared.
+template<size_t buf_size>
+argon2id::hash obtain_key(const argon2id::salt& salt, std::array<char, buf_size>& password) {
+    auto hashed_password = argon2id::create(password.data(), strlen(password.data()), salt);
+    monocypher::wipe(password.data(), buf_size);
+
+    return hashed_password;
+}

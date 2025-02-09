@@ -41,8 +41,15 @@ ArgsAdd parse_add(int argc, const char **argv) {
 ArgsRemove parse_remove([[maybe_unused]] int argc, [[maybe_unused]] const char **argv) {
     return {};
 }
-ArgsSearch parse_search([[maybe_unused]] int argc, [[maybe_unused]] const char **argv) {
-    return {};
+ArgsSearch parse_search(int argc, const char **argv) {
+    if (argc < 1) {
+        throw std::invalid_argument("The keyword is needed");
+        abort();
+    } else if (argc > 1) {
+        std::clog << "[WARN] Too many parameters only the first is considered." << std::endl;
+    }
+
+    return {argv[0]};
 }
 
 Args parse_args(const Action& action, int argc, const char **argv) {
@@ -66,6 +73,7 @@ Args parse_action(int argc, const char **argv) {
     if (argc <= 1) {
         print_usage(argc == 1 ? argv[0] : "client");
         throw std::invalid_argument("Arguments are needed");
+        abort();
     }
 
     auto action_opt = parse_action(argv[1]);
@@ -81,6 +89,7 @@ Args parse_action(int argc, const char **argv) {
         return parse_args(action, argc, argv);
     } else {
         throw std::invalid_argument("Invalid action. Choose between add, remove and search.");
+        abort();
     }
 
 }

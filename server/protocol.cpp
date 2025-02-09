@@ -82,7 +82,7 @@ bool DSSEProtocol::init_encrypted_index(const std::string& user_id,
     fs::path se_path = user_dir / "Se.enc";
     fs::path sr_path = user_dir / "Sr.enc";
 
-    constexpr size_t SE_ENTRY_SIZE = 256 + 64 + 8 + 256;  // Key (256 bytes) || Eid (64 bytes) || Con (8 bytes) || rn (256 bytes)
+    constexpr size_t SE_ENTRY_SIZE = 64 + 64 + 8 + 64;  // Key (256 bytes) || Eid (64 bytes) || Con (8 bytes) || rn (256 bytes)
     constexpr size_t SR_ENTRY_SIZE = 256 + 64;  // Key (256) + Con (64)
     
     // Validate input sizes
@@ -90,10 +90,10 @@ bool DSSEProtocol::init_encrypted_index(const std::string& user_id,
         std::cerr << "[ERROR] Invalid Se size.\n";
         return false;
     }
-    if (Sr_serialized.size() % SR_ENTRY_SIZE != 0) {
+    /*if (Sr_serialized.size() % SR_ENTRY_SIZE != 0) {
         std::cerr << "[ERROR] Invalid Sr size.\n";
         return false;
-    }
+    }*/
 
     try {
         // Handle Se (encrypted index)
@@ -141,7 +141,7 @@ bool DSSEProtocol::update_encrypted_index(const std::string& user_id,
 
     fs::path se_path = storage_path / user_id / "Se.enc";
 
-    constexpr size_t SE_ENTRY_SIZE = 256 + 64 + 256;  // Key(256) + Value(256+64+256)
+    constexpr size_t SE_ENTRY_SIZE = 64 + 64 + 8 + 64;  // Key(512) + Value(512+64+512)
 
     if (Se_serialized.size() % SE_ENTRY_SIZE != 0) {
         std::cerr << "[ERROR] Invalid Se' size.\n";
@@ -182,7 +182,7 @@ bool DSSEProtocol::store_encrypted_document(const std::string& user_id,
     // we need to extract each document and store it separately.
     for (size_t i = 0; i < document_data.size(); ) {
         if (i + 16 + 8 > document_data.size()) {
-            std::cerr << "[ERROR] Invalid document data format.\n";
+            std::cerr << "[ERROR] Invalid document header.\n";
             return false;
         }
 
@@ -191,7 +191,8 @@ bool DSSEProtocol::store_encrypted_document(const std::string& user_id,
         uint64_t doc_len = *reinterpret_cast<const uint64_t*>(&document_data[i]);
         i += 8;
 
-        if (i + doc_len > document_data.size()) {
+        // Detect overflows.
+        if (i + doc_len > document_data.size() || i + doc_len < i) {
             std::cerr << "[ERROR] Invalid document data format.\n";
             return false;
         }
@@ -237,6 +238,9 @@ bool DSSEProtocol::search_keyword(const std::string& user_id,
                                   std::vector<uint8_t>& ID1,        // Output: Stores previous search result (explicit index Sr)
                                   std::vector<uint8_t>& ID2,        // Output: Stores newly retrived encrypted results (encrypted index Se)
                                   uint64_t& newCon) {               // Output: Updated counter for consistency across searches
+    
+    using hash = monocypher::hash<monocypher::Blake2b<64>>;
+
     if (!create_user_directory(user_id)) return false;
 
     fs::path user_dir = storage_path / user_id;
@@ -264,8 +268,14 @@ bool DSSEProtocol::search_keyword(const std::string& user_id,
     // Load Sr into memory
     std::unordered_map<std::vector<uint8_t>, std::vector<uint8_t>, VectorHash> Sr_map;
     while (!sr_file.eof()) {
-        std::vector<uint8_t> key(512), value(512 + 64 + 512);
+        std::vector<uint8_t> key(64);
         sr_file.read(reinterpret_cast<char*>(key.data()), key.size());
+        if (sr_file.gcount() == 0) break;
+        size_t length;
+        sr_file.read(reinterpret_cast<char*>(&length), sizeof(length));
+        if (sr_file.gcount() == 0) break;
+        
+        std::vector<uint8_t> value(length);
         sr_file.read(reinterpret_cast<char*>(value.data()), value.size());
         if (sr_file.gcount() == 0) break;
         Sr_map[key] = value;
@@ -276,59 +286,62 @@ bool DSSEProtocol::search_keyword(const std::string& user_id,
     // Check if Sr[tw] exists
     auto it = Sr_map.find(tw);
     if (it != Sr_map.end()) {
-        ID1.insert(ID1.end(), it->second.begin(), it->second.begin() + 256);  // Eid
-        std::memcpy(&prev_con, it->second.data() + 256, sizeof(prev_con));   // Con
+        ID1.insert(ID1.end(), it->second.begin() + 8, it->second.end());  // Eid
+        std::memcpy(&prev_con, it->second.data(), sizeof(prev_con));   // Con
         Lcon = prev_con; // Update Lcon with prevuious search counter
     } // otherwise proceed searching in Se
 
+    // Step 14: If Se[Addrw] != null
+    std::unordered_map<std::vector<uint8_t>, std::vector<uint8_t>, VectorHash> Se_map;
+    while (!se_file.eof()) {
+        std::vector<uint8_t> key(64), value(64 + 8 + 64);
+        se_file.read(reinterpret_cast<char*>(key.data()), key.size());
+        se_file.read(reinterpret_cast<char*>(value.data()), value.size());
+        if (se_file.gcount() == 0) break;
+        Se_map[key] = value;
+    }
+
+    se_file.close();
+
     // Step 11: Iterate over Con to Lcon
     for (uint64_t i = Con; i <= Lcon; ++i) {
-        std::vector<uint8_t> Keyw(32), Addrw(32);
+        std::vector<uint8_t> buff{};
 
         // Step 12: Keyw <- H(KTw || i)
         // Hashes KTw || i to generate a unique key (Keyw) for this iteration
-        monocypher::c::crypto_blake2b_ctx hash_ctx;
-        monocypher::c::crypto_blake2b_init(&hash_ctx, Keyw.size());
-        monocypher::c::crypto_blake2b_update(&hash_ctx, KTw.data(), KTw.size());
-        monocypher::c::crypto_blake2b_update(&hash_ctx, reinterpret_cast<const uint8_t*>(&i), sizeof(i));
-        monocypher::c::crypto_blake2b_final(&hash_ctx, Keyw.data());
+        buff.insert(buff.end(), KTw.begin(), KTw.end());
+        buff.insert(buff.end(), reinterpret_cast<uint8_t*>(&i), reinterpret_cast<uint8_t*>(&i) + sizeof(i));
+        auto Keyw = hash::create(buff.data(), buff.size());
 
         // Step 13: Addrw <- H(Keyw || 1)
         // Derive Addrw used as a pointer to the encrypted entry in Se
-        monocypher::c::crypto_blake2b_init(&hash_ctx, Addrw.size());
-        monocypher::c::crypto_blake2b_update(&hash_ctx, Keyw.data(), Keyw.size());
-        uint8_t one = 1;
-        monocypher::c::crypto_blake2b_update(&hash_ctx, &one, sizeof(one));
-        monocypher::c::crypto_blake2b_final(&hash_ctx, Addrw.data());
+        uint8_t one = -1;
+        buff.clear();
+        buff.insert(buff.end(), Keyw.begin(), Keyw.end());
+        buff.insert(buff.end(), reinterpret_cast<uint8_t*>(&one), reinterpret_cast<uint8_t*>(&one) + sizeof(one));
+        auto Addrw = hash::create(buff.data(), buff.size());
 
-        // Step 14: If Se[Addrw] != null
-        std::unordered_map<std::vector<uint8_t>, std::vector<uint8_t>, VectorHash> Se_map;
-        while (!se_file.eof()) {
-            std::vector<uint8_t> key(32), value(256 + 64 + 256);
-            se_file.read(reinterpret_cast<char*>(key.data()), key.size());
-            se_file.read(reinterpret_cast<char*>(value.data()), value.size());
-            if (se_file.gcount() == 0) break;
-            Se_map[key] = value;
-        }
-
-        se_file.close();
+        buff.clear();
+        buff.insert(buff.end(), Addrw.begin(), Addrw.end());
 
         // Check if Se[Addrw] exists
-        auto se_it = Se_map.find(Addrw);
+        auto se_it = Se_map.find(buff);
         if (se_it != Se_map.end()) {
             // Step 15: (Eid || i || rn) <- Se[Addrw] ⊕ H(Keyw || 0)
-            std::vector<uint8_t> Eid_i_rn(512 + 64 + 512);
-            std::vector<uint8_t> mask(512 + 64 + 512);
+            std::vector<uint8_t> Eid_i_rn(64 + 8 + 64);
 
             // Extract Se[Addrw] and decrypt it using mask H(Keyw || 0)
-            monocypher::c::crypto_blake2b_init(&hash_ctx, mask.size());
-            monocypher::c::crypto_blake2b_update(&hash_ctx, Keyw.data(), Keyw.size());
             uint8_t zero = 0;
-            monocypher::c::crypto_blake2b_update(&hash_ctx, &zero, sizeof(zero));
-            monocypher::c::crypto_blake2b_final(&hash_ctx, mask.data());
+            buff.clear();
+            buff.insert(buff.end(), Keyw.begin(), Keyw.end());
+            buff.insert(buff.end(), reinterpret_cast<uint8_t*>(&zero), reinterpret_cast<uint8_t*>(&zero) + sizeof(zero));
+            auto mask = hash::create(buff.data(), buff.size());
 
             for (size_t j = 0; j < Eid_i_rn.size(); ++j) {
-                Eid_i_rn[j] = se_it->second[j] ^ mask[j];
+                Eid_i_rn[j] = se_it->second[j];
+            }
+            for (size_t j = 0; j < mask.size(); ++j) {
+                Eid_i_rn[j] ^= mask[j];
             }
 
             // Step 16: ID2 <- ID2 ∪ {Eid || i}
@@ -340,24 +353,27 @@ bool DSSEProtocol::search_keyword(const std::string& user_id,
             Se_map.erase(se_it);
 
             // Step 18-22: Follow rn chain
-            std::vector<uint8_t> rn(Eid_i_rn.begin() + 256 + 64, Eid_i_rn.end());
+            std::vector<uint8_t> rn(Eid_i_rn.begin() + 64 + 8, Eid_i_rn.end());
             while (!std::all_of(rn.begin(), rn.end(), [](uint8_t b) { return b == 0; })) {  // rn != 0
                 // Compute next Addrw
-                monocypher::c::crypto_blake2b_init(&hash_ctx, Addrw.size());
-                monocypher::c::crypto_blake2b_update(&hash_ctx, Addrw.data(), Addrw.size());
-                monocypher::c::crypto_blake2b_update(&hash_ctx, rn.data(), rn.size());
-                monocypher::c::crypto_blake2b_final(&hash_ctx, Addrw.data());
+                for (size_t i = 0; i < 64; ++i) Addrw[i] ^= rn[i];
+
+                buff.clear();
+                buff.insert(buff.end(), Addrw.begin(), Addrw.end());
 
                 // Repeat decryption and add to ID2
-                se_it = Se_map.find(Addrw);
+                se_it = Se_map.find(buff);
                 if (se_it == Se_map.end()) break;
 
                 for (size_t j = 0; j < Eid_i_rn.size(); ++j) {
-                    Eid_i_rn[j] = se_it->second[j] ^ mask[j];
+                    Eid_i_rn[j] = se_it->second[j];
+                }
+                for (size_t j = 0; j < mask.size(); ++j) {
+                    Eid_i_rn[j] ^= mask[j];
                 }
 
-                ID2.insert(ID2.end(), Eid_i_rn.begin(), Eid_i_rn.begin() + 256 + 64);
-                rn.assign(Eid_i_rn.begin() + 256 + 64, Eid_i_rn.end());
+                ID2.insert(ID2.end(), Eid_i_rn.begin(), Eid_i_rn.begin() + 64 + 8);
+                rn.assign(Eid_i_rn.begin() + 64 + 8, Eid_i_rn.end());
                 Se_map.erase(se_it);
             }
         }
@@ -389,21 +405,31 @@ bool DSSEProtocol::search_finalize(const std::string& user_id,
 
     // Load Sr into memory
     while (!sr_file.eof()) {
-        std::vector<uint8_t> key(256), value(256 + 64); // TODO: change to 512
-        sr_file.read(reinterpret_cast<char*>(key.data()), key.size());
-        sr_file.read(reinterpret_cast<char*>(value.data()), value.size());
+        // TODO: read checks.
+        std::vector<uint8_t> t(32);
+        sr_file.read(reinterpret_cast<char*>(t.data()), t.size());
         if (sr_file.gcount() == 0) break;
-        Sr_map[key] = value;
+        
+        size_t length;
+        sr_file.read(reinterpret_cast<char*>(&length), sizeof(length));
+        if (sr_file.gcount() == 0) break;
+
+        std::vector<uint8_t> value(length);
+        sr_file.read(reinterpret_cast<char*>(value.data()), value.size());
+
+        if (sr_file.gcount() == 0) break;
+        Sr_map[t] = value;
     }
 
     sr_file.close();
 
     // Step 31: Store plaintext search results
     // Update Sr[tw] with the new values
-    Sr_map[tw].clear();
-    Sr_map[tw].insert(Sr_map[tw].end(), ID1.begin(), ID1.end());
-    Sr_map[tw].insert(Sr_map[tw].end(), reinterpret_cast<uint8_t*>(&Con), 
+    auto& value = Sr_map[tw];
+    value.clear();
+    value.insert(value.end(), reinterpret_cast<uint8_t*>(&Con), 
                       reinterpret_cast<uint8_t*>(&Con) + sizeof(Con));
+    value.insert(value.end(), ID1.begin(), ID1.end());
 
     // Overwrite Sr file
     std::ofstream sr_out(sr_path, std::ios::binary | std::ios::trunc);
@@ -414,6 +440,8 @@ bool DSSEProtocol::search_finalize(const std::string& user_id,
     }
     for (const auto& entry : Sr_map) {
         sr_out.write(reinterpret_cast<const char*>(entry.first.data()), entry.first.size());
+        size_t length = entry.second.size();
+        sr_out.write(reinterpret_cast<const char*>(&length), sizeof(length));
         sr_out.write(reinterpret_cast<const char*>(entry.second.data()), entry.second.size());
     }
 

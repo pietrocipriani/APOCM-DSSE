@@ -25,17 +25,14 @@ void Protocol<lambda>::load_or_setup_keys() {
 
 template<size_t lambda>
 void Protocol<lambda>::setup() {
-    const size_t buf_size = 256;
-    std::array<char, buf_size> password;
-    obtain_secure_password(password, "Choose password: ");
-
-    keystore.create_keys(password);
-    monocypher::wipe(password.data(), buf_size);
+    keystore.create_keys();
 }
 
 template<size_t lambda>
 void Protocol<lambda>::add(const ArgsAdd& args) {
     DocMap documents;
+
+    std::clog << "[+] Reading documents." << std::endl;
 
     // Read documents.
     for (auto& path : args.paths) {
@@ -59,6 +56,8 @@ void Protocol<lambda>::add(const ArgsAdd& args) {
         }
     }
 
+    std::clog << "[+] Generating index." << std::endl;
+
     KTMap index;
 
     // Extract keywords
@@ -73,6 +72,7 @@ void Protocol<lambda>::add(const ArgsAdd& args) {
 
     }
 
+    std::clog << "[+] Encrypting." << std::endl;
     
     load_or_setup_keys();
 
@@ -84,6 +84,8 @@ void Protocol<lambda>::add(const ArgsAdd& args) {
     --keystore.con;
     keystore.store_keys();
     keystore.wipe_keys();
+
+    std::clog << "[+] Sending data." << std::endl;
 
     send(0); // add operation
     send(encrypted_index.size());
@@ -105,6 +107,9 @@ void Protocol<lambda>::search(const ArgsSearch& args) {
     using hash = monocypher::hash<monocypher::Blake2b<64>>;
     using prp = monocypher::session::encryption_key<monocypher::XChaCha20_Poly1305>;
 
+    std::clog << "[+] Sending search parameters." << std::endl;
+
+
     keystore.load_keys();
 
     const auto& keyword = args.keyword;
@@ -119,6 +124,8 @@ void Protocol<lambda>::search(const ArgsSearch& args) {
     send(kt);
     kt.wipe();
     send(keystore.con);
+    
+    std::clog << "[+] Reading first response." << std::endl;
 
     auto count_1 = recv<size_t>();
     auto count_2 = recv<size_t>();
@@ -140,6 +147,8 @@ void Protocol<lambda>::search(const ArgsSearch& args) {
 
         id2.emplace_back(eid, con);
     }
+
+    std::clog << "[+] Decrypting entries." << std::endl;
 
     keystore.load_keys();
     for (auto& [eid, con] : id2) {
@@ -168,13 +177,32 @@ void Protocol<lambda>::search(const ArgsSearch& args) {
             removals.insert(uuid);
         }
     }
+    
+    // Store con to send it to the server.
+    auto con = keystore.con;
 
     keystore.wipe_keys();
 
     for (auto& uuid : removals) id1.erase(uuid);
 
+    std::clog << "[+] Sending Sr." << std::endl;
+
     send(id1.size());
-    for (auto& uuid : id1) send(uuid);
+    if (id1.empty()) {
+        std::cout << "No results." << std::endl;
+    }
+    for (auto& uuid : id1) {
+        // NOTE: temporary user feedback
+        std::cout << std::hex << std::setfill('0');
+        for (uint8_t byte : uuid) {
+            std::cout << std::setw(2) << static_cast<int>(byte);
+        }
+        std::cout << std::endl;
+
+        send(uuid);
+    }
+
+    send(con);
 
     // TODO: read documents.
 }
@@ -183,13 +211,14 @@ template<size_t lambda>
 Protocol<lambda>::Protocol(const sockpp::unix_address& server_addr) {
 
     if (auto res = sock.connect(server_addr); !res) {
-        auto msg = std::format("Unable to reach the server: {}", res.error_message());
+        auto msg = std::format("Unable to reach the server.", sock.last_error_str());
         throw std::runtime_error(std::move(msg));
     }
 
     // TODO: ensure the server authenticity.
-    auto pid = sock.get_option<int>(SOL_SOCKET, SO_PEERCRED);
-    std::cerr << "Server credentials: " << pid.value() << std::endl;
+    if (int pid; sock.get_option<int>(SOL_SOCKET, SO_PEERCRED, &pid)) {
+        std::cerr << "Server credentials: " << pid << std::endl;
+    }
 
 }
 
@@ -204,6 +233,7 @@ Protocol<lambda>::Data Protocol<lambda>::process(Operation op, const KTMap& inde
 
     std::unordered_map<key, value> encrypted_index;
 
+    // Encrypt the index
     for (auto& [keyword, docs] : index) {
         auto [start, end] = index.equal_range(keyword);
 
@@ -269,7 +299,7 @@ void Protocol<lambda>::send(const char* data) {
 template<size_t lambda>
 void Protocol<lambda>::send(const uint8_t* data, size_t size) {
     auto res = sock.write_n(data, size);
-    if (!res || res != size) {
+    if (res == -1 || static_cast<size_t>(res) != size) {
         throw std::ios_base::failure("Unable to write the buffer to the socket");
         abort();
     }
@@ -277,7 +307,8 @@ void Protocol<lambda>::send(const uint8_t* data, size_t size) {
 
 template<size_t lambda>
 void Protocol<lambda>::print_response() {
-    std::cerr << "Server> [MSG] dummy msg" << std::endl;
+    // TODO: read server message.
+    std::cerr << "[Server] dummy msg" << std::endl;
 }
 
 
@@ -294,7 +325,9 @@ Protocol<lambda>::Data Protocol<lambda>::encrypt_documents(DocMap& args) {
         monocypher::session::nonce nonce{};
         static_assert(monocypher::session::nonce::byte_count == 24);
 
-        auto ad = uuid | serialize(content.size());
+        // Consider in the length also the mac and the nonce.
+        auto ad = uuid | serialize(content.size() + 16 + 24);
+        static_assert(decltype(ad)::byte_count == 16 + 8);
         auto mac = prp(keystore.key_d).lock(
             nonce,
             {content.data(), content.size()},
@@ -303,8 +336,8 @@ Protocol<lambda>::Data Protocol<lambda>::encrypt_documents(DocMap& args) {
         );
 
         result.insert(result.end(), ad.begin(), ad.end());
-        result.insert(result.end(), nonce.begin(), nonce.end());
         result.insert(result.end(), mac.begin(), mac.end());
+        result.insert(result.end(), nonce.begin(), nonce.end());
         result.insert(result.end(), content.begin(), content.end());
     }
 

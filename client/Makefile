@@ -1,5 +1,5 @@
 
-GPPPARAMS := -std=c++23 -Wall -Wextra -Wpedantic -I ../monocypher-cpp/include/ -lbsd -lsockpp -luuid
+GPPPARAMS := -std=c++23 -Wall -Wextra -Wpedantic -I ../monocypher-cpp/include/ -lbsd -lsockpp -luuid -g
 
 
 client: main.cpp argparse.o protocol.o Monocypher.o keystore.o

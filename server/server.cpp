@@ -78,7 +78,7 @@ void DSSEServer::handle_client(sockpp::unix_stream_socket client_sock) {
         }
 
         // Receive encrypted documents
-        std::vector<uint8_t> doc_data(doc_size);
+        std::vector<uint8_t> doc_data(total_doc_size);
         if (!receive_exact(client_sock, doc_data.data(), doc_data.size())) {
             std::cerr << "[ERROR] Failed to receive encrypted documents.\n";
             return;
@@ -92,7 +92,7 @@ void DSSEServer::handle_client(sockpp::unix_stream_socket client_sock) {
         std::cout << "[+] Handling SEARCH request.\n";
 
         // Receive search query: t (256) + KT (256) + Con (64)
-        std::vector<uint8_t> t(256), KT(256);
+        std::vector<uint8_t> t(32), KT(32);
         uint64_t Con;
         if (!receive_exact(client_sock, t.data(), t.size()) ||
             !receive_exact(client_sock, KT.data(), KT.size()) ||
@@ -100,6 +100,8 @@ void DSSEServer::handle_client(sockpp::unix_stream_socket client_sock) {
             std::cerr << "[ERROR] Failed to receive search parameters.\n";
             return;
         }
+
+        std::cout << "[+] Searching.\n";
 
         // Step 1: Perform search and send results back
         std::vector<uint8_t> ID1, ID2;
@@ -109,19 +111,18 @@ void DSSEServer::handle_client(sockpp::unix_stream_socket client_sock) {
             return;
         }
 
-        // Send response: ID1 size (4 bytes) + ID2 size (4 bytes) + ID1 + ID2 + newCon (64)
-        // Send ID1 size (4 bytes) + ID2 size (4 bytes)
-        uint32_t ID1_size = ID1.size() / 16;
-        uint32_t ID2_size = ID2.size() / (64 + 8);
+        // Send response: ID1 size (8 bytes) + ID2 size (8 bytes) + ID1 + ID2 + newCon (64)
+        // Send ID1 size (8 bytes) + ID2 size (8 bytes)
+        size_t ID1_size = ID1.size();
+        size_t ID2_size = ID2.size();
         if (!client_sock.write(&ID1_size, sizeof(ID1_size)) ||
             !client_sock.write(&ID2_size, sizeof(ID2_size))) {
             std::cerr << "[ERROR] Failed to send search response sizes.\n";
             return;
         }
         // Send ID1 and ID2
-        if (!client_sock.write(ID1.data(), ID1.size()) ||
-            !client_sock.write(ID2.data(), ID2.size()) ||
-            !client_sock.write(&newCon, sizeof(newCon))) {
+        if (client_sock.write(ID1.data(), ID1.size()) != ID1.size() ||
+            client_sock.write(ID2.data(), ID2.size()) != ID2.size()) {
             std::cerr << "[ERROR] Failed to send search results.\n";
             return;
         }

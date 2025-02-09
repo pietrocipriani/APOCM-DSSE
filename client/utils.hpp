@@ -20,10 +20,14 @@ struct method_ref {
 
 
 
-class KeysNotFound : std::runtime_error { using std::runtime_error::runtime_error; };
-class CorruptedKeys : std::runtime_error {
+class KeysNotFound : public std::runtime_error {
+    using std::runtime_error::runtime_error;
+
+};
+class CorruptedKeys : public std::runtime_error {
 public:
     CorruptedKeys() : std::runtime_error("Encryption keys are corrupted. Manually erase the key file to reset. Note: you will lose the documents.") {}
+    using std::runtime_error::runtime_error;
 };
 
 
@@ -80,7 +84,7 @@ struct std::hash<monocypher::byte_array<size>> {
 
 
 template<typename T>
-monocypher::byte_array<sizeof(T)> serialize(const T& val) {
+constexpr monocypher::byte_array<sizeof(T)> serialize(const T& val) {
     return monocypher::byte_array<sizeof(T)>(reinterpret_cast<const void*>(&val), sizeof(T));
 }
 

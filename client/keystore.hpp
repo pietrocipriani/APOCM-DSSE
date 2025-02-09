@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Monocypher.hh>
+#include "utils.hpp"
 
 template<size_t lambda>
 class Keystore {
@@ -12,19 +13,12 @@ public:
     
     monocypher::secret_byte_array<lambda> key_g, key_f, key_t;
 
-    monocypher::byte_array<8> con{0xff};
+    monocypher::byte_array<8> con = serialize(-2ULL);
 
     
     void load_keys();
 
-    template<size_t buf_size>
-    void create_keys([[maybe_unused]] const std::array<char, buf_size>& password) {
-        key_d.randomize();
-        key_g.randomize();
-        key_f.randomize();
-        key_t.randomize();
-        con.fill(0xff);
-    }
+    void create_keys();
     
     void store_keys();
 

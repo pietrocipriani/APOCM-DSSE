@@ -6,7 +6,7 @@
 #include <functional>
 #include <sockpp/unix_stream_socket.h>
 
-#define SOCK_ADDR "/tmp/dsse_apocm"
+#define SOCK_ADDR "\0dsse_apocm"
 
 int main(int argc, const char **argv) {
     sockpp::initialize();
@@ -31,6 +31,12 @@ int main(int argc, const char **argv) {
             [&](const ArgsSearch& args) { dsse.search(args); },
         }, args);
 
+    } catch (const KeysNotFound& e) {
+        std::cerr << e.what() << std::endl;
+        return EXIT_FAILURE;
+    } catch (const CorruptedKeys& e) {
+        std::cerr << e.what() << std::endl;
+        return EXIT_FAILURE;
     } catch (const std::runtime_error& e) {
         std::cerr << e.what() << std::endl;
         return EXIT_FAILURE;

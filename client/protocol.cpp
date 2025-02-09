@@ -43,6 +43,7 @@ void Protocol<lambda>::add(const ArgsAdd& args) {
 
         // NOTE: duplicate files are not removed.
 
+        // Generates an uuid for this document.
         DocId uuid; uuid_generate(uuid.data());
 
         // TODO: manage exceptions.
@@ -60,7 +61,8 @@ void Protocol<lambda>::add(const ArgsAdd& args) {
 
     KTMap index;
 
-    // Extract keywords
+    // Extract keywords.
+    // NOTE: in this implementation a keyword is an alphanumeric sequence in the document.
     std::regex exp("[a-zA-Z0-9]+");
     for (const auto& [uuid, content] : documents) {
 
@@ -74,6 +76,8 @@ void Protocol<lambda>::add(const ArgsAdd& args) {
 
     std::clog << "[+] Encrypting." << std::endl;
     
+    // The keys are needed to generate the encrypted index and encrypting the documents.
+    // NOTE: reading of the documents and sending to the server are not performed while the keys are loaded to avoid IO blocks.
     load_or_setup_keys();
 
     // NOTE: this can lead to memory issues, however sending while encrypting increases the key exposure in memory.
@@ -103,21 +107,23 @@ void Protocol<lambda>::remove([[maybe_unused]] const ArgsRemove& args) {
 
 template<size_t lambda>
 void Protocol<lambda>::search(const ArgsSearch& args) {
+    // The primitives used.
     using prf = monocypher::hash<monocypher::Blake2b<32>>;
     using hash = monocypher::hash<monocypher::Blake2b<64>>;
     using prp = monocypher::session::encryption_key<monocypher::XChaCha20_Poly1305>;
 
     std::clog << "[+] Sending search parameters." << std::endl;
 
-
     keystore.load_keys();
 
+    // Search parameters.
     const auto& keyword = args.keyword;
     auto t = prf::createMAC(keyword.data(), keyword.size(), keystore.key_t);
     auto kt = prf::createMAC(keyword.data(), keyword.size(), keystore.key_f);
 
     // Store con to send it to the server.
     auto con = keystore.con;
+    // Wiped before IO.
     keystore.wipe_keys();
 
     send(2);
@@ -129,6 +135,7 @@ void Protocol<lambda>::search(const ArgsSearch& args) {
     
     std::clog << "[+] Reading first response." << std::endl;
 
+    // ID1.size, ID2.size
     auto count_1 = recv<size_t>();
     auto count_2 = recv<size_t>();
 
@@ -151,10 +158,12 @@ void Protocol<lambda>::search(const ArgsSearch& args) {
     std::unordered_set<DocId> removals;
     std::vector<std::pair<hash_t, Con>> id2; 
 
+    // read ID1
     for (size_t i = 0; i < count_1; ++i) {
         auto uuid = recv<DocId::byte_count>();
         id1.insert(uuid);
     }
+    // read ID2
     for (size_t i = 0; i < count_2; ++i) {
         auto eid = recv<hash::Size>();
         auto con = recv<sizeof(keystore.con)>();
@@ -164,12 +173,9 @@ void Protocol<lambda>::search(const ArgsSearch& args) {
 
     std::clog << "[+] Decrypting entries." << std::endl;
 
+    // Decryption of the results
     keystore.load_keys();
     for (auto& [eid, con] : id2) {
-        auto sk_plain = keyword | con;
-        auto sk = prf::createMAC(sk_plain.data(), sk_plain.size(), keystore.key_g);
-        monocypher::wipe(sk_plain.data(), sk_plain.size());
-
         using Mac = monocypher::session::mac;
         using Nonce = monocypher::session::nonce;
 
@@ -177,10 +183,17 @@ void Protocol<lambda>::search(const ArgsSearch& args) {
         Nonce nonce(eid.template range<Mac::byte_count, Nonce::byte_count>());
         auto data = eid.template range<40, 24>();
 
+        auto sk_plain = keyword | con;
+        monocypher::secret_byte_array sk(prf::createMAC(sk_plain.data(), sk_plain.size(), keystore.key_g));
+        monocypher::wipe(sk_plain.data(), sk_plain.size());
+
         if (auto ok = prp(sk).unlock(nonce, mac, data, data.data()); !ok) {
+            sk.wipe();
             std::cerr << "[WARN] Corrupted data." << std::endl;
             continue;
         }
+        sk.wipe();
+
         auto uuid = data.template range<0, DocId::byte_count>();
         // Serialized as 8B, little endian.
         auto op = data[DocId::byte_count];
@@ -218,12 +231,13 @@ void Protocol<lambda>::search(const ArgsSearch& args) {
 template<size_t lambda>
 Protocol<lambda>::Protocol(const sockpp::unix_address& server_addr) {
 
+    // Connects to the server.
     if (auto res = sock.connect(server_addr); !res) {
         auto msg = std::format("Unable to reach the server.", sock.last_error_str());
         throw std::runtime_error(std::move(msg));
     }
 
-    // TODO: ensure the server authenticity.
+    // TODO: ensure the server authenticity (uid of the pid).
     if (int pid; sock.get_option<int>(SOL_SOCKET, SO_PEERCRED, &pid)) {
         std::cerr << "Server credentials: " << pid << std::endl;
     }
@@ -243,11 +257,14 @@ Protocol<lambda>::Data Protocol<lambda>::process(Operation op, const KTMap& inde
 
     // Encrypt the index
     for (auto& [keyword, docs] : index) {
+        // KTw
         auto kt = prf::createMAC(keyword.data(), keyword.length(), keystore.key_f);
-
+        // Keyw
         auto key = hash::create(kt | keystore.con);
+        // Addrw
         monocypher::byte_array addr = hash::create(key | one<1>);
 
+        // Iterate the chain
         for (auto it = docs.begin(); it != docs.end(); ++it) {
             auto& uuid = *it;
             monocypher::byte_array<hash::Size> rn(0);
@@ -279,6 +296,7 @@ Protocol<lambda>::Data Protocol<lambda>::process(Operation op, const KTMap& inde
 
             encrypted_index[addr] = val;
 
+            // Next address for the chain.
             addr = addr ^ rn;
         }
     }

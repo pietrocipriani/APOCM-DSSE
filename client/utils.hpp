@@ -12,16 +12,6 @@ template<typename... Fs>
 struct overload : Fs... { using Fs::operator()...; };
 
 
-template<typename T, typename R, typename... Ps>
-struct method_ref {
-    T& object;
-    R (T::*method)(Ps...);
-
-    R operator()(Ps... ps) { return object.*method(ps...); }
-};
-
-
-
 class KeysNotFound : public std::runtime_error {
     using std::runtime_error::runtime_error;
 
@@ -38,7 +28,7 @@ const monocypher::byte_array<size> zero{0};
 template<size_t size>
 const monocypher::byte_array<size> one{0xff};
 
-
+// Concatenation of string and array.
 template<size_t size>
 std::vector<uint8_t> operator|(const std::string& a1, const monocypher::byte_array<size>& a2) {
     std::vector<uint8_t> result;
@@ -50,6 +40,7 @@ std::vector<uint8_t> operator|(const std::string& a1, const monocypher::byte_arr
     return result;
 }
 
+// XOR between two arrays.
 template<size_t size>
 monocypher::secret_byte_array<size> operator^(const monocypher::secret_byte_array<size>& a1, const monocypher::secret_byte_array<size>& a2) {
     monocypher::secret_byte_array<size> result{a1};

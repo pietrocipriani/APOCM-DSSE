@@ -47,7 +47,7 @@ void Keystore<lambda>::load_keys() {
     std::array<char, 256> password;
     obtain_secure_password(password, "Insert password: ");
     
-    // NOTE: password is wiped.
+    // NOTE: password is internally wiped.
     auto key = obtain_key(salt, password);
 
     auto& ad = salt;
@@ -77,7 +77,7 @@ void Keystore<lambda>::store_keys() {
     std::array<char, 256> password;
     obtain_secure_password(password, "Choose password: ");
     
-    // NOTE: password is wiped.
+    // NOTE: password is internally wiped.
     auto [key, salt] = derive_key(password);
 
     using AE = monocypher::session::encryption_key<monocypher::XChaCha20_Poly1305>;
@@ -86,6 +86,7 @@ void Keystore<lambda>::store_keys() {
     auto data = key_d | key_g | key_t | key_f | con;
     auto ad = salt;
     
+    // Random nonce, 24B: can be safely assumed unique.
     Nonce nonce{};
     auto mac = AE(key).lock(nonce, data, ad, data.data());
     key.wipe();
@@ -104,6 +105,7 @@ void Keystore<lambda>::store_keys() {
     // TODO: manage exceptions.
     keystream.write(reinterpret_cast<const char*>(file_data.data()), file_data.size());
 
+    // Principle of least privilege.
     using std::filesystem::perms;
     std::filesystem::permissions(key_file, perms::owner_write | perms::owner_read);
 }

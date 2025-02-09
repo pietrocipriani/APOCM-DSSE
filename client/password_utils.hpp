@@ -4,7 +4,8 @@
 #include <bsd/readpassphrase.h>
 #include <iostream>
 
-
+/// Argon2id as 32B password KDF.
+/// Configured to be slow as this is run client-side.
 using argon2id = monocypher::argon2<monocypher::Argon2id, 32, 400000, 3>;
 
 
@@ -17,10 +18,9 @@ bool is_password_secure([[maybe_unused]] const std::array<char, buf_size>& passw
 
 // The buffer is passed from outside to avoid possible copies that can leave
 // the password uncleared.
-/// Asks the password to the user in a "secure" manner.
+/// Asks the password to the user in a "secure" way.
 template<size_t buf_size>
 void read_password(std::array<char, buf_size>& buf, const char* prompt = "Password: ") {
-    // TODO: check if there can be buffers that store the password.
     auto res = readpassphrase(prompt, buf.data(), buf_size, RPP_REQUIRE_TTY | RPP_SEVENBIT);
 
     if (res == nullptr) {
@@ -35,6 +35,7 @@ void read_password(std::array<char, buf_size>& buf, const char* prompt = "Passwo
 template<size_t buf_size>
 void obtain_secure_password(std::array<char, buf_size>& password, const char* prompt = "Password") {
     bool first_time = true;
+    // Repeat until it is secure.
     do {
         if (!first_time) {
             // TODO: define to the user what "secure" means.

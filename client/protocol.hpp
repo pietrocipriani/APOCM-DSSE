@@ -21,20 +21,31 @@ template<size_t lambda = 32>
 class Protocol {
 private:
     enum class Operation { add, remove };
+
+    // Type for KTMap
     using KTMap = std::unordered_map<std::string, std::unordered_set<DocId>>;
+    // Map between uuids and document contents.
     using DocMap = std::unordered_map<DocId, std::string>;
+    // A generic sequnce of bytes.
     using Data = std::vector<uint8_t>;
 
+    // The state of the protocol. Contains the keys and con (theta in the paper).
     Keystore<lambda> keystore;
 
+    // The socket handler.
     sockpp::unix_connector sock;
 
+    /// Loads the keys or generates new one if there is no key-file.
     void load_or_setup_keys();
+    /// Generates a new state.
     void setup();
 
+    // Process method of the paper.
     Data process(Operation op, const KTMap& index) const;
+    // Encrypts (AE) the documents one by one and serializes them.
     Data encrypt_documents(DocMap& args);
 
+    // Writes to the socket.
     void send(const Data& data);
     void send(const uint8_t* data, size_t size);
     void send(const char* data);
@@ -45,6 +56,7 @@ private:
     }
 
 
+    // Reads from the socket.
     template<typename T>
     T recv() {
         T result;
@@ -69,10 +81,13 @@ public:
     Protocol(const sockpp::unix_address& server_addr);
     Protocol(std::string&& server_addr) : Protocol(sockpp::unix_address{server_addr}) {}
 
+    /// Add method for updates.
     void add(const ArgsAdd& args);
 
+    /// Remove method for updates.
     void remove(const ArgsRemove& args);
 
+    /// Performs a search.
     void search(const ArgsSearch& args);
 
 };
